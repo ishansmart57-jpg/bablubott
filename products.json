@@ -1,0 +1,17 @@
+[
+  {
+    "id": "p1",
+    "name": "food done json with fc ",
+    "price": 55
+  },
+  {
+    "id": "p2",
+    "name": "food done whiouth fc ",
+    "price": 25
+  },
+  {
+    "id": "p3",
+    "name": "fresh acc swiggy",
+    "price": 20
+  }
+]
