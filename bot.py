@@ -57,7 +57,24 @@ def get_product(product_id):
     return None
 
 
+FILE_STOCK_EXTENSIONS = {".zip"}
+
+def get_file_stock(product_id):
+    folder = os.path.join(BASE_DIR, "stock", product_id)
+    if not os.path.isdir(folder):
+        return []
+
+    return sorted(
+        os.path.join(folder, name)
+        for name in os.listdir(folder)
+        if os.path.isfile(os.path.join(folder, name))
+        and os.path.splitext(name)[1].lower() in FILE_STOCK_EXTENSIONS
+    )
+
 def get_stock_count(product_id):
+    file_stock = get_file_stock(product_id)
+    if file_stock:
+        return len(file_stock)
     return len(stock.get(product_id, []))
 
 
@@ -651,10 +668,7 @@ async def approve(
     order_id = query.data.split(":")[1]
 
     if order_id not in pending_orders:
-        await query.answer(
-            "Order not found.",
-            show_alert=True
-        )
+        await query.answer("Order not found.", show_alert=True)
         return
 
     order = pending_orders[order_id]
@@ -669,31 +683,77 @@ async def approve(
     product_id = order["product_id"]
     quantity = order["quantity"]
 
-    available_codes = stock.get(
-        product_id,
-        []
-    )
+    # ZIP file stock takes priority when stock/<product_id>/ contains ZIPs.
+    file_stock = get_file_stock(product_id)
+
+    if file_stock:
+        if len(file_stock) < quantity:
+            await query.answer(
+                "Not enough file stock to deliver this order.",
+                show_alert=True
+            )
+            return
+
+        selected_files = file_stock[:quantity]
+
+        try:
+            for path in selected_files:
+                with open(path, "rb") as f:
+                    await context.bot.send_document(
+                        chat_id=order["user_id"],
+                        document=f,
+                        caption=(
+                            "🎉 PAYMENT APPROVED ✅\n\n"
+                            f"🆔 Order ID: {order_id}\n"
+                            f"📦 Product: {order['product_name']}\n"
+                            f"🔢 Quantity: {quantity}\n\n"
+                            "📦 Your file is attached below."
+                        )
+                    )
+        except Exception as exc:
+            print("File delivery error:", exc)
+            await query.answer(
+                "Delivery failed. Stock was not changed.",
+                show_alert=True
+            )
+            return
+
+        # Remove files only after all requested files were sent.
+        for path in selected_files:
+            try:
+                os.remove(path)
+            except OSError as exc:
+                print("Could not remove delivered file:", exc)
+
+        order["status"] = "approved"
+        order["delivered_files"] = [
+            os.path.basename(path) for path in selected_files
+        ]
+
+        await query.edit_message_caption(
+            caption=(
+                "🎉 PAYMENT APPROVED & DELIVERED ✅\n\n"
+                f"🆔 Order ID: {order_id}\n"
+                f"📦 Product: {order['product_name']}\n"
+                f"🔢 Quantity: {quantity}\n"
+                f"📦 Files delivered: {quantity}"
+            )
+        )
+        return
+
+    # Existing code-stock fallback.
+    available_codes = stock.get(product_id, [])
 
     if len(available_codes) < quantity:
-
         await query.answer(
             "Not enough stock to deliver this order.",
             show_alert=True
         )
-
         return
 
-    # Take required codes from stock
     delivered_codes = available_codes[:quantity]
-
-    # Remove delivered codes
     stock[product_id] = available_codes[quantity:]
-
-    # Save stock immediately
-    save_json(
-        "stock.json",
-        stock
-    )
+    save_json("stock.json", stock)
 
     order["status"] = "approved"
     order["delivered_codes"] = delivered_codes
@@ -703,11 +763,10 @@ async def approve(
         for i, code in enumerate(delivered_codes)
     )
 
-    # Send codes to buyer
     await context.bot.send_message(
         chat_id=order["user_id"],
         text=(
-            "✅ PAYMENT APPROVED\n\n"
+            "🎉 PAYMENT APPROVED ✅\n\n"
             f"🆔 Order ID: {order_id}\n"
             f"📦 Product: {order['product_name']}\n"
             f"🔢 Quantity: {quantity}\n"
@@ -719,10 +778,9 @@ async def approve(
         parse_mode="Markdown"
     )
 
-    # Update admin message
     await query.edit_message_caption(
         caption=(
-            "✅ PAYMENT APPROVED & DELIVERED\n\n"
+            "🎉 PAYMENT APPROVED & DELIVERED ✅\n\n"
             f"🆔 Order ID: {order_id}\n"
             f"📦 Product: {order['product_name']}\n"
             f"🔢 Quantity: {quantity}\n"
